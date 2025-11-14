@@ -1,0 +1,10 @@
+__pycache__/
+tmp*
+outputs/figures/
+outputs/reports/
+outputs/logs/
+notes/
+.vscode/
+.python-version
+.ipynb_checkpoints/
+notebooks/
