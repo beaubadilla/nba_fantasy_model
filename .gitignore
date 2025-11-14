@@ -8,3 +8,19 @@ notes/
 .python-version
 .ipynb_checkpoints/
 notebooks/
+
+# Ignore all model outputs except for specific files
+outputs/models/*
+!outputs/models/sample_xgb_metrics.json
+!outputs/models/sample_xgb_pipeline.joblib
+
+# Ignore all prediction outputs except for specific files
+outputs/predictions/*
+!outputs/predictions/sample_xgb_predictions.csv
+
+# Ignore all data except for specific files
+data/*
+!data/interim/placeholder.csv
+!data/processed/sample_data.csv
+!data/raw/24_25/sample_coaches.csv
+!data/raw/24_25/sample_players.csv
