@@ -1,176 +1,111 @@
 # NBA Fantasy Model
-Regression model to predict a player's fantasy average for the upcoming season. \
-Input: Player's previous year's stats
-Output: Fantasy Point Average per Game for next season
 
-## Run Tests
-`pytest tests/`
-`make tests`
+An end-to-end machine learning pipeline for forecasting NBA fantasy production. The project ingests multi-season player box score data, engineers basketball-aware features (career trends, lagged stats, coaching/team changes), and trains an explainable XGBoost regressor that exports both metrics and deployment-ready artifacts.
 
-## `Make` commands
-Check Makefile for extensive list of commands
-`make test`
-`make format`
-`make run`
+## Why this project stands out
+- **Production-quality data stack** – raw CSV ingestion → imputation of missing seasons → advanced feature engineering → model training with traceable artifacts.
+- **Basketball-shaped features** – previous-season context, rolling career form, coaching/team stability flags, and fantasy scoring rules turn basic box scores into signal.
+- **Reproducible + tested** – deterministic pipelines, type-safe utilities, and `pytest` coverage for every transformation layer.
+- **Portfolio-friendly deliverables** – tidy processed dataset, serialized model (`.joblib`), JSON metrics, and prediction exports ready for stakeholder review.
 
-## Run the data pipeline
-The end-to-end preprocessing pipeline expects a root folder of season subdirectories and writes both the imputed dataset and engineered-feature export.
-
-```bash
-make run
+## Repository layout
+```
+├── data/
+│   ├── raw/         # Season folders (e.g., 22_23/players.csv)
+│   ├── interim/     # Pipeline checkpoints (imputed, feature engineering, filtered)
+│   └── processed/   # Final modeling table (data.csv)
+├── outputs/models/  # Saved pipelines, metrics, sample predictions
+├── scripts/         # Tools for a variety of purposes (e.g. display feature importance cleanly)
+├── src/             # Production code (loading, features, filters, utils)
+├── tests/           # Pytest suite covering each transformation
+├── run_pipeline.py  # Orchestrates the feature pipeline end-to-end
+└── training.py      # Trains & evaluates the XGBoost regressor
 ```
 
-The command above reads all seasons inside `data/raw/`, saves the imputed dataset to `data/interim/imputed.csv`, and writes the feature-enhanced version to the same directory with the `_features.csv` suffix.
+## Data pipeline
+The pipeline is orchestrated by [`run_pipeline.py`](run_pipeline.py) and can be triggered via `python run_pipeline.py --data-root data/raw --output data/interim/players.csv`. Major steps:
+1. **Ingestion (`src/data_loading.py`)** – read each season folder (e.g., `22_23/players.csv`), add a `season_start` column, and stack them.
+2. **Imputation (`src/data_imputation.py`)** – backfill missing seasons for injured players, fill static attributes (name/position), and recompute age trajectories.
+3. **Feature engineering (`src/feature_engineering.py`)**
+   - `add_years_in_nba`: experience clock per player.
+   - `add_career_per_game_features`: rolling career per-game rates (PPG, APG, etc.).
+   - `add_previous_season_lag_features`: previous-season stats aligned to aggregate “TOT/2TM” rows.
+   - `add_fantasy_points_per_game`: DraftKings-style fantasy scoring target.
+   - `add_new_coach_flag` & `add_new_team_flag`: stability indicators built from curated coaching data.
+4. **Filtering (`src/filter.py`)** – remove per-team duplicates for multi-team years, drop zero-year records, and enforce a minimum games-played threshold.
+5. **Column hygiene** – friendly feature names via `COLUMN_RENAME_MAP` and rounding helper `round_continuous_features` for clean exports.
 
-## Fantasy Points (FP) Calculation
-1 point = 1.0 FP \
-1 assist = 1.5 FP \
-1 rebound = 1.2 FP \
-1 block = 2.0 FP \
-1 steal = 2.0 FP \
-1 turnover = -1.0 FP
+The script writes three datasets so you can debug every layer:
+- `*_imputed.csv` – gap-filled player seasons.
+- `*_feature_engineer.csv` – enriched feature matrix.
+- `*_filtered.csv` – final modeling view. A copy is also mirrored to `data/processed/data.csv` for the training step.
 
-## Standard 9 Categories
-If we ever want to build a model for a Cat9 league
-1. Points
-2. Rebounds
-3. Assists
-4. Steals
-5. Blocks
-6. Three-Pointers
-7. Field Goal Percentage (FG%)
-8. Free Throw Percentage (FT%)
-9. Turnovers
+## Modeling approach
+[`training.py`](training.py) consumes `data/processed/data.csv` and builds a scikit-learn `Pipeline` composed of:
+- Column-wise preprocessing (`build_preprocessor`) with median scaling for numeric fields + one-hot encoding for categoricals.
+- An `XGBRegressor` tuned for tabular regression (500 estimators, conservative learning rate, subsampling for regularization).
+- `KFold` cross-validation to quantify generalization (default 5 folds) before fitting on the full dataset.
 
-## Row
-Next Season = 22-23  
-All stats are for regular season only  
-```
-Player Name
-* [TARGET] FP per game next season (22-23)
-* Points per game in previous season (21-22)
-* Assists per game in previous season (21-22)
-* Rebounds per game in previous season (21-22)
-* Blocks per game in previous season (21-22)
-* Steals per game in previous season (21-22)
-* Turnovers per game in previous season (21-22)
-* Points per game for career up until 21-22 inclusive
-* Assists per game for career until 21-22 inclusive
-* Rebounds per game for career until 21-22 inclusive
-* Blocks per game for career until 21-22 inclusive
-* Steals per game for career until 21-22 inclusive
-* Turnovers per game for career until 21-22 inclusive
-[DONE] 1. Is 21-22 coach the same as the upcoming 22-23 coach?
-[DONE] 2. Is this player's team the same between 21-22 and the upcoming 22-23 season?
-Number of new players on team with high minutes
-[DONE] Age
-[DONE] 3. Number of years in NBA until 21-22 inclusive
-Usage rate/number X option
-Total usage rate of roster
-is hungry/motivated (contract year, fiba/olympic year, just on fiba/olympic, deep playoff run)
-number of all star teammates
-number of all nba teammates
-number of awards
-4. current team's offensive rating last year
-5. current team's defensive rating last
-[DONE] Position
-Number of players within the team with the same position
-Number of injured players
-Height
-```
+Artifacts saved to `outputs/models/` include:
+- `xgb_pipeline.joblib` – serialized preprocessing + estimator stack.
+- `xgb_metrics.json` – training + CV metrics, e.g.
+  ```json
+  {
+    "cv_rmse_mean": 5.04,
+    "cv_rmse_std": 0.11,
+    "train_rmse": 2.09,
+    "train_mae": 1.60,
+    "train_r2": 0.96
+  }
+  ```
+- `xgb_predictions.csv` – per-player predictions, ground truth, and residuals for slicing analyses.
+
+Because identifier columns (`Player-additional`, `season_start`) are validated before merges, the exported predictions can be joined safely back to scouting tools or BI dashboards.
+
+## Getting started
+1. **Clone + create a virtual environment**
+   ```bash
+   git clone <repo-url>
+   cd nba_fantasy_model
+   python -m venv .venv
+   source .venv/bin/activate
+   ```
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Run unit tests**
+   ```bash
+   make test  # wraps `pytest -v`
+   ```
+
+## Reproducing the pipeline
+1. **Prepare raw data** – place `players.csv` files into season-named folders inside `data/raw/` (e.g., `data/raw/23_24/players.csv`).
+2. **Generate features**
+   ```bash
+   python run_pipeline.py --data-root data/raw --output data/interim/players.csv
+   ```
+3. **Train + evaluate the model**
+   ```bash
+   python training.py \
+     --data-path data/processed/data.csv \
+     --model-output outputs/models/xgb_pipeline.joblib \
+     --metrics-output outputs/models/xgb_metrics.json \
+     --predictions-output outputs/models/xgb_predictions.csv
+   ```
+4. **Inspect artifacts** – review `outputs/models/xgb_metrics.json` for performance, open the CSV of predictions to audit players by team, coach, or experience level, and compare lift versus baseline heuristics.
+
+## Quality checklist
+- ✅ Deterministic preprocessing with explicit schema checks.
+- ✅ Comprehensive unit tests for loaders, imputers, feature builders, and filters.
+- ✅ Reusable logging utilities (`src/utils/logging_utils.py`) for pipeline observability.
+- ✅ Make targets for testing, formatting, pipeline execution, and clean-up.
+
+## Extending the project
+1. **Feature sandbox** – incorporate advanced tracking metrics (e.g., usage rate, on/off splits) by adding columns to `add_previous_season_lag_features` and `COLUMN_RENAME_MAP`.
+2. **Model experimentation** – plug alternative regressors (LightGBM, CatBoost, linear baselines) into `build_pipeline` and compare via the same CV harness.
+3. **Deployment** – expose `xgb_pipeline.joblib` through a FastAPI endpoint or scheduled batch job that re-trains as soon as a new season’s data drops.
+4. **Visualization suite** – pair `xgb_predictions.csv` with a Streamlit dashboard to communicate forecasts to product managers and coaches.
+
 ---
-Curry
-23_24
-fp for 23_24 [target]
-[x] team
-[x] pts for 23_24
-[x] rebs for 23_24
-[x] asts for 23_24
-[v] pts for 22_23
-[v] rebs for 22_23
-[v] ast for 22_23
-[v] running pts until 23_24
-[v] running rebs until 23_24
-[v] running ast until 23_24
-[v] does Curry have a new coach for 23_24? 
-    - compare 22_23 with 23_24
-    - assume we have data of 23_24 coaches
-        * to create the training dataset, we use raw data
-        * in the future, to run inference, we need to have a separate dataset for the upcoming season
-[v] did Curry move teams for 23_24?
-    - compare 22_23 with 23_24
-    - assume we have data of 23_24 roster
-        * to create the training dataset, we use raw data
-        * in the future, to run inference, we need to have a separate dataset for the upcoming season
-
-
--------------
-[x] Player-additional
-[x] season_start
-[x] Rk
-Age
-[x] Team
-G
-[x] GS (Games Started)
-[x] MP
-[x] FG
-[x] FGA
-[x] FG%
-[x] 3P
-[x] 3PA
-[x] 3P%
-[x] 2P
-[x] 2PA
-[x] 2P%
-[x] eFG%
-[x] FT
-FTA
-[x] FT%
-[x] ORB
-[x] DRB
-TRB (season rpg)
-AST (season apg)
-STL (season spg)
-BLK (season bpg)
-TOV (season tpg)
-[x] PF (season pfpg)
-PTS (season ppg)
-[x] Awards
-[x] did_play
-[x] Player
-Pos
-years_in_nba
-[x] total_PTS (season total points)
-[x] total_AST
-[x] total_TRB
-[x] total_BLK
-[x] total_STL
-[x] total_TOV
-career_PTS_pg (running career points per game)
-career_AST_pg
-career_TRB_pg
-career_BLK_pg
-career_STL_pg
-career_TOV_pg
-new_coach
-new_team
-
-# Case Studies
-Rookie
-
-# TODO
-* Find players with significant 1 season spike
-* Find players with significant 1 season drop
-* Find players who fluctuate
-* Find players who rose to high FP from low FP
-* Find players who fell to low FP from high FP
-* Are rookies worth risking for?
-* Do tanking teams have high FP players?
-
-# Questions
-[DONE] * Should we filter out rows by games (G) [played]? Let's try it
-[DONE] * Should we remove rookie seasons? Yes. Create a separate model for rookie seasons
-* For players that played multiple teams within a season, do we use their total, first team, last team, or X team for singular season stats? Last team. When I think about drafting players at the beginning of the season, I don't care that much how well they did in any team except their most recent one (which is often the same team for the next.)
-
-# Notes
-We should do all filtering once the dataset is complete. This is in regards to merging, and then calculating, career stats. Initially, I filtered out games at the beginning of data prep. However, when I started creating cumulative features, it was inaccurate because rows were missing.
+_This repository highlights the full spectrum of a sports analytics engagement: data engineering discipline, modeling rigor, and stakeholder-ready outputs._
